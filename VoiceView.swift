@@ -15,7 +15,7 @@ struct VoiceView: View {
     @State private var typedText = ""
 
     // The voice-loop route. Contract: POST {"text": ...} -> {"audioBase64", "text"}.
-    private let endpoint = URL(string: "https://velay.vellum.ai/01a137f9-8a00-73b5-85a5-7a1e4726d010/x/voice")!
+    private let endpoint = URL(string: "https://TUNNEL_URL/x/voice")!
 
     // Sent as `x-api-key`. Must match the `voice/workflow_key` credential.
     // In production, load this from the Keychain rather than hardcoding it.
