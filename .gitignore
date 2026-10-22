@@ -1,0 +1,13 @@
+# Dependencies and Next.js build output
+node_modules/
+.next/
+out/
+.vercel
+*.tsbuildinfo
+
+# Local env files. Commit .env.example only — never real keys.
+.env
+.env*.local
+.env.development
+.env.production
+.env.test
