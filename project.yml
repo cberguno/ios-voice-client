@@ -1,6 +1,4 @@
-# XcodeGen project spec — ios-voice-client
-# Generate with: xcodegen generate
-# Target: iOS 17+ (VoiceView uses AVAudioApplication, iOS 17 API).
+# XcodeGen project spec — direct OpenRouter client (no voice server)
 name: ios-voice-client
 options:
   bundleIdPrefix: com.cberguno
@@ -16,6 +14,8 @@ targets:
     sources:
       - VoiceRecorder.swift
       - NativeTranscriber.swift
+      - OpenRouterKeychain.swift
+      - OpenRouterClient.swift
       - VoiceView.swift
       - VoiceApp.swift
     info:
@@ -23,4 +23,3 @@ targets:
       properties:
         NSMicrophoneUsageDescription: This app needs microphone access to record your voice for conversations.
         NSSpeechRecognitionUsageDescription: This app needs speech recognition to transcribe your voice.
-        VoiceWorkflowKey: ""  # Chris adds the real voice/workflow_key value here before running.
