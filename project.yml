@@ -23,3 +23,26 @@ targets:
       properties:
         NSMicrophoneUsageDescription: This app needs microphone access to record your voice for conversations.
         NSSpeechRecognitionUsageDescription: This app needs speech recognition to transcribe your voice.
+  VoiceClientTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests/OpenRouterClientTests.swift
+    dependencies:
+      - target: VoiceClient
+  VoiceClientUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests/VoiceClientUITests.swift
+    dependencies:
+      - target: VoiceClient
+schemes:
+  VoiceClient:
+    build:
+      targets:
+        VoiceClient: all
+    test:
+      targets:
+        - VoiceClientTests
+        - VoiceClientUITests

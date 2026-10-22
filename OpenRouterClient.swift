@@ -6,8 +6,14 @@ struct ChatMessage: Codable {
 }
 
 /// Direct personal-device connection. Never prints or persists the API key.
+/// A URLSession can be injected for deterministic tests of the real request code.
 struct OpenRouterClient {
+    private let session: URLSession
     private let url = URL(string: "https://openrouter.ai/api/v1/chat/completions")!
+
+    init(session: URLSession = .shared) {
+        self.session = session
+    }
 
     func complete(messages: [ChatMessage], model: String, apiKey: String) async throws -> String {
         let selectedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -19,7 +25,7 @@ struct OpenRouterClient {
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONEncoder().encode(RequestBody(model: selectedModel, messages: messages))
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let response = response as? HTTPURLResponse else {
             throw ClientError.invalidResponse
         }
