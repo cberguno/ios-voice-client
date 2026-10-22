@@ -9,6 +9,7 @@ struct VoiceView: View {
     @State private var isRecording = false
     @State private var status = ""
     @State private var reply = ""
+    @State private var micDenied = false
 
     // The voice-loop route. Contract: POST {"text": ...} -> {"audioBase64", "text"}.
     private let endpoint = URL(string: "https://velay.vellum.ai/01a137f9-8a00-73b5-85a5-7a1e4726d010/x/voice")!
@@ -21,14 +22,50 @@ struct VoiceView: View {
         VStack(spacing: 20) {
             Button(isRecording ? "Stop" : "Record") {
                 if isRecording { Task { await stopAndSend() } }
-                else { try? recorder.start(); isRecording = recorder.isRecording }
+                else { requestMicAndRecord() }
             }
             .buttonStyle(.borderedProminent)
+
+            if micDenied {
+                Text("Microphone access is off. Enable it in Settings.")
+                Button("Open Settings") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+            }
 
             Text(status)
             Text(reply)
         }
         .padding()
+    }
+
+    private func requestMicAndRecord() {
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted:
+            startRecording()
+        case .denied, .undetermined where micDenied:
+            micDenied = true
+        case .undetermined:
+            AVAudioApplication.requestRecordPermission { granted in
+                Task { @MainActor in
+                    if granted { startRecording() } else { micDenied = true }
+                }
+            }
+        @unknown default:
+            micDenied = true
+        }
+    }
+
+    private func startRecording() {
+        micDenied = false
+        do {
+            try recorder.start()
+            isRecording = recorder.isRecording
+        } catch {
+            status = "mic error: \(error)"
+        }
     }
 
     private func stopAndSend() async {
