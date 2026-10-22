@@ -1,0 +1,65 @@
+name: iOS Simulator Compile and Smoke Test
+
+on:
+  push:
+    branches: [chatgpt-native-voice-direct]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  simulator-tests:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Compile for iOS Simulator
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project ios-voice-client.xcodeproj \
+            -scheme VoiceClient \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "generic/platform=iOS Simulator" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+      - name: Run OpenRouter protocol tests and app-launch smoke test
+        run: |
+          set -euo pipefail
+          DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          data=json.load(sys.stdin)
+          for devices in data["devices"].values():
+              for device in devices:
+                  if device["name"].startswith("iPhone") and device.get("isAvailable", False):
+                      print(device["udid"])
+                      sys.exit(0)
+          sys.exit("No available iPhone simulator")
+          ')
+          echo "Using simulator $DEVICE_ID"
+          xcrun simctl boot "$DEVICE_ID"
+          xcrun simctl bootstatus "$DEVICE_ID" -b
+          xcodebuild \
+            -project ios-voice-client.xcodeproj \
+            -scheme VoiceClient \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=$DEVICE_ID" \
+            -resultBundlePath "$RUNNER_TEMP/VoiceClientTests.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceClientTests
+          path: ${{ runner.temp }}/VoiceClientTests.xcresult
+          if-no-files-found: ignore
