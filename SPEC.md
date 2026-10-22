@@ -189,3 +189,16 @@ x-api-key: <voice/workflow_key>
 502 -> {"error":{"message":"..."}}   upstream failure
 503 -> {"error":{"message":"..."}}   key not configured
 ```
+
+---
+
+## 7. App Transport Security (ATS): decision — no exceptions
+
+The endpoint in VoiceView.swift is already `https://` (the platform edge, and
+ngrok/cloudflared both hand out HTTPS URLs too). ATS only restricts cleartext
+HTTP, so the app needs **no ATS exception** in any build configuration.
+
+Rule for the project: if a dev tunnel ever serves plain `http://`, fix the
+tunnel config (both ngrok and cloudflared terminate TLS for free) instead of
+adding `NSAllowsArbitraryLoads`. A Debug-only `NSAllowsLocalNetworking` is the
+acceptable fallback if a local-device test ever needs it.
