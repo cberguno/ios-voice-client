@@ -23,4 +23,5 @@ targets:
       properties:
         NSMicrophoneUsageDescription: This app needs microphone access to record your voice for conversations.
         NSSpeechRecognitionUsageDescription: This app needs speech recognition to transcribe your voice.
-        VoiceWorkflowKey: ""  # Chris adds the real voice/workflow_key value here before running.
+        # Injected locally via Xcode scheme env vars, or set manually before running. Never commit a real key.
+        VoiceWorkflowKey: ""
