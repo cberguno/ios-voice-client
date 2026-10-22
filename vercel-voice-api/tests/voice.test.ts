@@ -57,7 +57,7 @@ test("missing credentials is a configuration failure", async () => {
 });
 
 test("empty message is rejected", async () => {
-  const response = await handleVoice(request(" "));
+  const response = await handleVoice(request(" "), env);
   assert.equal(response.status, 400);
 });
 
