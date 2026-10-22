@@ -1,0 +1,15 @@
+# Cloudflare Tunnel origin for the local Vellum voice route host.
+#
+# The public HTTPS URL that cloudflared prints (https://<name>.trycloudflare.com)
+# replaces the velay.vellum.ai base URL in VoiceView.swift. Append /x/voice and
+# put that full URL in VoiceView's endpoint before running the app.
+#
+# Do not commit a tunnel token, credentials file, or API key. Quick Tunnels
+# need no Cloudflare account. scripts/cloudflared-tunnel.sh reads the service
+# URL below and runs `cloudflared tunnel --url` so cloudflared prints the
+# trycloudflare.com URL. A named tunnel can reuse this ingress after you add
+# tunnel + credentials-file locally (those files stay outside the repo).
+
+ingress:
+  # Local Vellum route host. The last rule is the required catch-all.
+  - service: http://localhost:3000
