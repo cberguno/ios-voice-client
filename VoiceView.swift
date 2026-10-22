@@ -1,100 +1,134 @@
 import AVFoundation
 import SwiftUI
 
-/// Functional start/stop UI. Record -> transcribe natively -> send text to the
-/// voice-loop endpoint -> play the spoken reply.
+/// Personal iPhone voice assistant: Apple STT + OpenRouter + Apple TTS.
+/// No Vellum endpoint, no ElevenLabs dependency, and no key in the repository.
+@MainActor
 struct VoiceView: View {
     @State private var recorder = VoiceRecorder()
-    @State private var player: AVAudioPlayer?
+    @State private var synthesizer = AVSpeechSynthesizer()
     @State private var isRecording = false
-    @State private var status = ""
-    @State private var reply = ""
+    @State private var isBusy = false
     @State private var micDenied = false
-    @State private var typed = ""
-    // Temporary debug path: typed text bypasses STT (blocked in simulator).
+    @State private var hasKey = false
+    @State private var keyInput = ""
     @State private var typedText = ""
-
-    // The voice-loop route. Contract: POST {"text": ...} -> {"audioBase64", "text"}.
-    private let endpoint = URL(string: "https://velay.vellum.ai/01a137f9-8a00-73b5-85a5-7a1e4726d010/x/voice")!
-
-    // Sent as `x-api-key`. Must match the `voice/workflow_key` credential.
-    // In production, load this from the Keychain rather than hardcoding it.
-    private let apiKey = Bundle.main.object(forInfoDictionaryKey: "VoiceWorkflowKey") as? String ?? ""
+    @State private var latestReply = ""
+    @State private var status = "Ready"
+    @State private var messages: [ChatMessage] = []
+    @AppStorage("openrouter.model") private var model = "z-ai/glm-5.3-flash"
 
     var body: some View {
-        VStack(spacing: 20) {
-            Button(isRecording ? "Stop" : "Record") {
-                if isRecording { Task { await stopAndSend() } }
-                else { requestMicAndRecord() }
-            }
-            .buttonStyle(.borderedProminent)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Voice Assistant").font(.largeTitle.bold())
+                Text("Speech: Apple  ·  AI: OpenRouter").foregroundStyle(.secondary)
 
-            TextField("Type to the assistant", text: $typedText)
-                .textFieldStyle(.roundedBorder)
-            Button("Send") {
-                let text = typedText.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty else { return }
-                typedText = ""
-                Task {
-                    status = "sending: \(text)"
-                    do {
-                        let response = try await sendToAssistant(text)
-                        reply = response.text
-                        status = "done"
-                        play(response.audio)
-                    } catch {
-                        status = "error: \(error)"
+                GroupBox("OpenRouter setup") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(hasKey ? "API key saved in this device's Keychain" : "No API key saved")
+                            .font(.footnote)
+                        SecureField("Paste OpenRouter API key", text: $keyInput)
+                            .textContentType(.password)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .textFieldStyle(.roundedBorder)
+                        HStack {
+                            Button("Save key") { saveKey() }
+                                .disabled(keyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            if hasKey {
+                                Button("Remove key", role: .destructive) { removeKey() }
+                            }
+                        }
+                        TextField("OpenRouter model ID", text: $model)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .textFieldStyle(.roundedBorder)
+                        Text("Choose a model allowed by your OpenRouter guardrails.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-            }
-            .buttonStyle(.bordered)
-            .disabled(typedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
-            if micDenied {
-                Text("Microphone access is off. Enable it in Settings.")
-                Button("Open Settings") {
-                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                Button(isRecording ? "Stop and send recording" : "Record your voice") {
+                    if isRecording {
+                        Task { await finishRecording() }
+                    } else {
+                        requestMicAndRecord()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isBusy || !hasKey)
+
+                HStack {
+                    TextField("Or type a message", text: $typedText)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { sendTyped() }
+                    Button("Send") { sendTyped() }
+                        .disabled(isBusy || !hasKey ||
+                            typedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+
+                if micDenied {
+                    Text("Microphone access is denied. Enable it in Settings.")
+                        .foregroundStyle(.red)
+                    Button("Open Settings") {
+                        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
                         UIApplication.shared.open(url)
                     }
                 }
-            }
-
-            Text(status)
-            Text(reply)
-
-            HStack {
-                TextField("Type to the assistant", text: $typed)
-                    .textFieldStyle(.roundedBorder)
-                Button("Send") {
-                    let text = typed
-                    typed = ""
-                    Task { await sendTyped(text) }
+                if isBusy { ProgressView() }
+                Text(status).font(.footnote).foregroundStyle(.secondary)
+                if !latestReply.isEmpty {
+                    Text("Assistant").font(.headline)
+                    Text(latestReply).textSelection(.enabled)
+                    Button("Speak again") { speak(latestReply) }
+                    Button("Clear conversation") {
+                        messages.removeAll()
+                        latestReply = ""
+                        status = "Ready"
+                    }
                 }
-                .disabled(typed.isEmpty)
             }
+            .padding()
         }
-        .padding()
+        .onAppear { hasKey = OpenRouterKeychain.load() != nil }
     }
 
-    /// Temporary typed-text path so the AI loop is testable while the
-    /// simulator's speech recognizer is unavailable (kLSR 300).
-    private func sendTyped(_ text: String) async {
-        status = "sending: \(text)"
+    private func saveKey() {
         do {
-            let response = try await sendToAssistant(text)
-            reply = response.text
-            status = "done"
-            play(response.audio)
+            try OpenRouterKeychain.save(keyInput)
+            keyInput = ""
+            hasKey = true
+            status = "API key saved on device."
         } catch {
-            status = "error: \(error)"
+            status = error.localizedDescription
         }
+    }
+
+    private func removeKey() {
+        do {
+            try OpenRouterKeychain.delete()
+            hasKey = false
+            keyInput = ""
+            status = "API key removed."
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    private func sendTyped() {
+        let text = typedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !isBusy else { return }
+        typedText = ""
+        Task { await send(text) }
     }
 
     private func requestMicAndRecord() {
+        synthesizer.stopSpeaking(at: .immediate)
         switch AVAudioApplication.shared.recordPermission {
         case .granted:
             startRecording()
-        case .denied, .undetermined where micDenied:
+        case .denied:
             micDenied = true
         case .undetermined:
             AVAudioApplication.requestRecordPermission { granted in
@@ -108,72 +142,80 @@ struct VoiceView: View {
     }
 
     private func startRecording() {
-        micDenied = false
         do {
             try recorder.start()
             isRecording = recorder.isRecording
+            micDenied = false
+            status = "Recording… tap Stop when finished."
         } catch {
-            status = "mic error: \(error)"
+            status = "Microphone error: \(error.localizedDescription)"
         }
     }
 
-    private func stopAndSend() async {
+    private func finishRecording() async {
         isRecording = false
-        guard let url = recorder.stop() else { return }
-        status = "transcribing..."
+        guard let file = recorder.stop() else {
+            status = "No recording found."
+            return
+        }
+        isBusy = true
+        status = "Transcribing with Apple Speech…"
         do {
-            let text = try await NativeTranscriber().transcribe(url: url)
-            status = "sending: \(text)"
-            let response = try await sendToAssistant(text)
-            reply = response.text
-            status = "done"
-            play(response.audio)
+            let text = try await NativeTranscriber().transcribe(url: file)
+            isBusy = false
+            await send(text)
         } catch {
-            status = "error: \(error)"
+            isBusy = false
+            status = "Transcription error: \(error.localizedDescription). Try typing instead."
         }
     }
 
-    private struct VoiceResponse {
-        let text: String
-        let audio: Data?
-    }
+    private func send(_ raw: String) async {
+        guard !isBusy else { return }
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            status = "Nothing to send."
+            return
+        }
+        guard let key = OpenRouterKeychain.load(), !key.isEmpty else {
+            hasKey = false
+            status = "Save your OpenRouter API key first."
+            return
+        }
+        isBusy = true
+        status = "Asking OpenRouter…"
+        defer { isBusy = false }
 
-    private func sendToAssistant(_ text: String) async throws -> VoiceResponse {
-        var req = URLRequest(url: endpoint)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        req.httpBody = try JSONEncoder().encode(["text": text])
-
-        let (data, http) = try await URLSession.shared.data(for: req)
-        guard let code = (http as? HTTPURLResponse)?.statusCode, (200..<300).contains(code) else {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw NSError(
-                domain: "VoiceView",
-                code: (http as? HTTPURLResponse)?.statusCode ?? -1,
-                userInfo: [NSLocalizedDescriptionKey: "HTTP \(body)"]
+        let conversation = [ChatMessage(role: "system", content:
+            "You are a helpful voice assistant. Answer naturally in one to three brief spoken sentences.")] +
+            messages + [ChatMessage(role: "user", content: text)]
+        do {
+            let answer = try await OpenRouterClient().complete(
+                messages: conversation, model: model, apiKey: key
             )
+            messages.append(ChatMessage(role: "user", content: text))
+            messages.append(ChatMessage(role: "assistant", content: answer))
+            latestReply = answer
+            status = "AI response received. Speaking…"
+            speak(answer)
+        } catch {
+            status = error.localizedDescription
         }
-
-        struct Payload: Decodable {
-            let text: String
-            let audioBase64: String?
-        }
-        let payload = try JSONDecoder().decode(Payload.self, from: data)
-        return VoiceResponse(
-            text: payload.text,
-            audio: payload.audioBase64.flatMap { Data(base64Encoded: $0) }
-        )
     }
 
-    private func play(_ data: Data?) {
-        guard let data else { return }
+    private func speak(_ answer: String) {
+        synthesizer.stopSpeaking(at: .immediate)
         do {
-            let audio = try AVAudioPlayer(data: data)
-            player = audio
-            audio.play()
+            let audio = AVAudioSession.sharedInstance()
+            try audio.setCategory(.playback, mode: .default)
+            try audio.setActive(true)
         } catch {
-            status = "audio error: \(error)"
+            status = "Audio session error: \(error.localizedDescription)"
+            return
         }
+        let utterance = AVSpeechUtterance(string: answer)
+        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        synthesizer.speak(utterance)
     }
 }
