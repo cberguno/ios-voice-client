@@ -1,4 +1,6 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
+import { clientIp, consumeRateLimit } from "./rate-limit";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -39,11 +41,28 @@ class UpstreamError extends Error {
   }
 }
 
-function jsonError(status: number, message: string): NextResponse {
+function jsonError(
+  status: number,
+  message: string,
+  extraHeaders?: Record<string, string>,
+): NextResponse {
   return NextResponse.json(
     { error: { message } },
-    { status, headers: NO_STORE },
+    { status, headers: { ...NO_STORE, ...extraHeaders } },
   );
+}
+
+function keysMatch(candidate: string, expected: string): boolean {
+  const left = createHash("sha256").update(candidate, "utf8").digest();
+  const right = createHash("sha256").update(expected, "utf8").digest();
+  return timingSafeEqual(left, right);
+}
+
+function workflowKeyAuthorized(request: NextRequest, expected: string): boolean {
+  const provided = request.headers.get("x-api-key");
+  const candidate = provided ?? "";
+  const matches = keysMatch(candidate, expected);
+  return provided !== null && candidate.length > 0 && matches;
 }
 
 function transcriptFromBody(body: unknown): string | null {
@@ -199,6 +218,25 @@ async function synthesize(
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const workflowKey = process.env.VOICE_WORKFLOW_KEY?.trim() ?? "";
+  // Fail closed. 503 (not 401) means the server secret is missing, so no
+  // caller is allowed through and providers are not called.
+  if (workflowKey.length === 0) {
+    console.error("Voice service is missing VOICE_WORKFLOW_KEY.");
+    return jsonError(503, "Voice service is not configured.");
+  }
+
+  const decision = consumeRateLimit(clientIp(request.headers));
+  if (decision.limited) {
+    return jsonError(429, "Too many requests.", {
+      "Retry-After": String(decision.retryAfterSeconds),
+    });
+  }
+
+  if (!workflowKeyAuthorized(request, workflowKey)) {
+    return jsonError(401, "Unauthorized.");
+  }
+
   let body: unknown;
   try {
     body = await request.json();
