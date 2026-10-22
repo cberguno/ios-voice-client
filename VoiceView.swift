@@ -10,6 +10,9 @@ struct VoiceView: View {
     @State private var status = ""
     @State private var reply = ""
     @State private var micDenied = false
+    @State private var typed = ""
+    // Temporary debug path: typed text bypasses STT (blocked in simulator).
+    @State private var typedText = ""
 
     // The voice-loop route. Contract: POST {"text": ...} -> {"audioBase64", "text"}.
     private let endpoint = URL(string: "https://velay.vellum.ai/01a137f9-8a00-73b5-85a5-7a1e4726d010/x/voice")!
@@ -26,6 +29,27 @@ struct VoiceView: View {
             }
             .buttonStyle(.borderedProminent)
 
+            TextField("Type to the assistant", text: $typedText)
+                .textFieldStyle(.roundedBorder)
+            Button("Send") {
+                let text = typedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { return }
+                typedText = ""
+                Task {
+                    status = "sending: \(text)"
+                    do {
+                        let response = try await sendToAssistant(text)
+                        reply = response.text
+                        status = "done"
+                        play(response.audio)
+                    } catch {
+                        status = "error: \(error)"
+                    }
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(typedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
             if micDenied {
                 Text("Microphone access is off. Enable it in Settings.")
                 Button("Open Settings") {
@@ -37,8 +61,33 @@ struct VoiceView: View {
 
             Text(status)
             Text(reply)
+
+            HStack {
+                TextField("Type to the assistant", text: $typed)
+                    .textFieldStyle(.roundedBorder)
+                Button("Send") {
+                    let text = typed
+                    typed = ""
+                    Task { await sendTyped(text) }
+                }
+                .disabled(typed.isEmpty)
+            }
         }
         .padding()
+    }
+
+    /// Temporary typed-text path so the AI loop is testable while the
+    /// simulator's speech recognizer is unavailable (kLSR 300).
+    private func sendTyped(_ text: String) async {
+        status = "sending: \(text)"
+        do {
+            let response = try await sendToAssistant(text)
+            reply = response.text
+            status = "done"
+            play(response.audio)
+        } catch {
+            status = "error: \(error)"
+        }
     }
 
     private func requestMicAndRecord() {
